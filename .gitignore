@@ -1,0 +1,21 @@
+# your ROM and everything made from it: never committed
+*.z64
+*.n64
+*.v64
+*.o2r
+*.otr
+/data/
+
+# made by setup.py and tools/build.py
+/build/
+/out/
+
+# fetched by setup.py (tools/fetch_deps.py)
+/deps/
+
+# the release's .nfo goes with the release download, not in the repository
+*.nfo
+
+__pycache__/
+*.pyc
+*.log

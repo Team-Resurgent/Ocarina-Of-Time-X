@@ -69,6 +69,7 @@ extern "C" void LusxLog_Settle(int on) {
     char lost[80];
 
     HoldLock();
+    LusxDebug_Files(on); // (first: the held lines go to the log file too)
     if (sHolding) {
         if (on) {
             for (unsigned at = 0; at < sHeldLength; at += (unsigned)strlen(sHeld + at) + 1) {

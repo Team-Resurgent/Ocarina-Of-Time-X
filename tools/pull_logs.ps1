@@ -1,4 +1,4 @@
-# pull_logs.ps1 -- copies Ocarina-Of-Time-X's log files (a tester build's: setup.py --tester) off the Xbox over its dashboard's FTP server, into a new folder named
+# pull_logs.ps1 -- copies Ocarina-Of-Time-X's log files (written with the port menu's Logging on) off the Xbox over its dashboard's FTP server, into a new folder named
 # after the time and the build, then prints the lines that matter (build, crashes, hangs, memory lows, warp test end).
 #
 #   powershell -ExecutionPolicy Bypass -File tools\pull_logs.ps1 -Xbox 192.168.1.50

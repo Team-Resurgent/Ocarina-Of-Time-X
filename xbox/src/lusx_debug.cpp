@@ -1,9 +1,12 @@
-// lusx_debug.cpp -- the tester build's tools: see lusx_debug.h. Files in T:, which is E:\TDATA\54520020 on the console:
+// lusx_debug.cpp -- the test tools: see lusx_debug.h. Files in T:, which is E:\TDATA\54520020 on the console, only while
+// the port menu's Logging is on (lusx_log.h; LusxDebug_Files):
 //
 //   lusx.log          this run: everything xbWatson would have shown
 //   lusx_prev.log     the run before it
 //   lusx_part.log     the older part of a run that passed LOG_LIMIT
 //   lusx_box.txt      the black box: one sector, overwritten in place every second
+//
+// With Logging off nothing here touches the disk, waits, or lights the LED: only the overlay (Test overlay) works.
 //
 // A hard lock can't write its own last line, so nothing here waits for the end. The black box goes straight to the disk
 // (no cache, and its size never changes, so a write is that one sector), a second at a time and at each mark; a log
@@ -18,6 +21,7 @@
 #if LUSX_DEBUG_TOOLS
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <xtl.h>
@@ -52,10 +56,13 @@ static CRITICAL_SECTION sLock; // the log's buffers and sMark
 static bool sStarted;
 static HANDLE sWake; // wakes the watchdog's thread early, for a save
 
-static char sBuffers[2][LOG_BUFFER];
+static char (*sBuffers)[LOG_BUFFER]; // two, made the first time Logging is on (64 KB a player without it doesn't pay)
 static unsigned sFilling, sLength, sLost;
 static unsigned sLogBytes;
 static bool sLogFailed, sBoxFailed;
+static volatile bool sFilesOn;  // Logging: lines kept, the files written (LusxDebug_Files)
+static bool sFilesOpen;         // the watchdog thread's: the logs moved aside and the black box open, this run
+static bool sRotated;           // this run's lusx.log started (the last one moved to lusx_prev.log)
 
 static HANDLE sBox = INVALID_HANDLE_VALUE;
 static char sSector[SECTOR] __attribute__((aligned(SECTOR)));
@@ -100,6 +107,9 @@ static void FlushLog(void) {
     int lostLength = 0;
     const char* data;
 
+    if (!sFilesOpen) {
+        return;
+    }
     EnterCriticalSection(&sLock);
     data = sBuffers[sFilling];
     length = sLength;
@@ -218,8 +228,8 @@ static void ReadLastRun(void) {
     Field(sSector, "note: ", note, sizeof(note));
     Field(sSector, "uptime: ", uptime, sizeof(uptime));
     Field(sSector, "free: ", memory, sizeof(memory));
-    if (strcmp(state, "exited") == 0) {
-        return;
+    if (strcmp(state, "exited") == 0 || strcmp(state, "logging off") == 0) {
+        return; // it ended as it should, or Logging was turned off before it did: nothing to say
     }
     snprintf(sLastRun[0], OVERLAY_COLUMNS, "%s",
              strcmp(state, "crashed") == 0 ? "LAST RUN CRASHED"
@@ -253,10 +263,41 @@ static void UpdateOverlay(DWORD now) {
     sShowing = lastRun || sOverlayOn;
 }
 
+// Logging on: this run's log started (the last run's moved aside, the first time) and the black box opened
+static void OpenFiles(void) {
+    if (!sRotated) {
+        DeleteFileA(LOG_PREVIOUS);
+        MoveFileA(LOG_PATH, LOG_PREVIOUS);
+        DeleteFileA(LOG_PART);
+        sRotated = true;
+    }
+    OpenBox();
+    sFilesOpen = true;
+    WriteBox();
+}
+
+// Logging off: what's kept goes out, and the black box says so, so the next start doesn't take it for a lock
+static void CloseFiles(void) {
+    FlushLog();
+    const char* state = sState;
+    sState = "logging off";
+    WriteBox();
+    sState = state;
+    if (sBox != INVALID_HANDLE_VALUE) {
+        CloseHandle(sBox);
+        sBox = INVALID_HANDLE_VALUE;
+    }
+    sFilesOpen = false;
+    sLogFailed = sBoxFailed = false;
+}
+
 // ---- for the other threads
 
-// asks the watchdog's thread to save now, and waits for it
+// asks the watchdog's thread to save now, and waits for it (only with Logging on: there's nothing to save otherwise)
 static void FlushAndWait(unsigned ms) {
+    if (!sFilesOn) {
+        return;
+    }
     const LONG asked = InterlockedIncrement((LONG*)&sFlushAsked);
 
     SetEvent(sWake);
@@ -268,12 +309,14 @@ static void FlushAndWait(unsigned ms) {
 extern "C" void LusxDebug_Line(const char* line) {
     size_t length;
 
-    if (!sStarted) { // (lusx_log.h's LusxLog_Send is what calls this, and only with Logging on)
+    if (!sStarted || !sFilesOn) {
         return;
     }
     length = strlen(line);
     EnterCriticalSection(&sLock);
-    if (sLength + length <= LOG_BUFFER) {
+    if (sBuffers == NULL) {
+        sLost++;
+    } else if (sLength + length <= LOG_BUFFER) {
         memcpy(sBuffers[sFilling] + sLength, line, length);
         sLength += (unsigned)length;
     } else {
@@ -311,18 +354,30 @@ extern "C" void LusxDebug_Start(const char* built) {
     sWake = CreateEvent(NULL, FALSE, FALSE, NULL);
     sStartMs = GetTickCount();
     snprintf(sBuilt, sizeof(sBuilt), "%s", built);
-    ReadLastRun();
-    DeleteFileA(LOG_PREVIOUS);
-    MoveFileA(LOG_PATH, LOG_PREVIOUS);
-    DeleteFileA(LOG_PART);
-    OpenBox();
+    ReadLastRun(); // (the files themselves wait for Logging: LusxDebug_Files)
     sStarted = true;
     if (sHaveLastRun) {
         char line[160];
         snprintf(line, sizeof(line), "lus-x: %s; %s; %s; %s\n", sLastRun[0], sLastRun[1], sLastRun[2], sLastRun[3]);
         LusxLog_Send(line);
     }
-    WriteBox();
+}
+
+// Logging turned on or off (LusxLog_Settle, any thread): lines kept from now, or not; the watchdog's thread opens or
+// closes the files at its next tick
+extern "C" void LusxDebug_Files(int on) {
+    if (!sStarted) {
+        return;
+    }
+    if (on && sBuffers == NULL) {
+        char(*buffers)[LOG_BUFFER] = (char(*)[LOG_BUFFER])malloc(2 * LOG_BUFFER);
+        EnterCriticalSection(&sLock);
+        sBuffers = buffers;
+        sFilling = sLength = 0;
+        LeaveCriticalSection(&sLock);
+    }
+    sFilesOn = on != 0 && sBuffers != NULL;
+    SetEvent(sWake);
 }
 
 extern "C" void LusxDebug_Stop(void) {
@@ -338,6 +393,13 @@ extern "C" void LusxDebug_Tick(const char* where, long frames) {
     MEMORYSTATUS ms;
 
     WaitForSingleObject(sWake, 100);
+    if (sFilesOn != sFilesOpen) {
+        if (sFilesOn) {
+            OpenFiles();
+        } else {
+            CloseFiles();
+        }
+    }
     const DWORD now = GetTickCount();
     const LONG asked = sFlushAsked;
     const bool second = now - sLastSecond >= 1000;
@@ -346,17 +408,6 @@ extern "C" void LusxDebug_Tick(const char* where, long frames) {
     sFreeKb = (unsigned long)(ms.dwAvailPhys >> 10);
     if (sFreeKb < sLowestKb) {
         sLowestKb = sFreeKb;
-    }
-    // each new low a MB under the last one said, once the game runs: the log's lines around it say where it was
-    {
-        static unsigned long sLoggedKb = 0xFFFFFFFF;
-        if (frames > 0 && sLowestKb + 1024 <= sLoggedKb) {
-            char line[160];
-            sLoggedKb = sLowestKb;
-            snprintf(line, sizeof(line), "lus-x: free memory down to %lu KB, the lowest yet (where: %s)\n", sLowestKb,
-                     where != NULL ? where : "?");
-            LusxLog_Send(line);
-        }
     }
     sFrames = frames;
     sWhereNow = where;
@@ -369,7 +420,18 @@ extern "C" void LusxDebug_Tick(const char* where, long frames) {
         sLastSecond = now;
         UpdateOverlay(now);
     }
-    if (sCrashed && !sLedOn) {
+    // each new low a MB under the last one said, once the game runs: the log's lines around it say where it was
+    {
+        static unsigned long sLoggedKb = 0xFFFFFFFF;
+        if (frames > 0 && sLowestKb + 1024 <= sLoggedKb) {
+            char line[160];
+            sLoggedKb = sLowestKb;
+            snprintf(line, sizeof(line), "lus-x: free memory down to %lu KB, the lowest yet (where: %s)\n", sLowestKb,
+                     where != NULL ? where : "?");
+            LusxLog_Send(line);
+        }
+    }
+    if (sCrashed && !sLedOn && sFilesOpen) {
         Led(LED_RED_FLASHING);
     }
     if (asked != sFlushDone || now - sLastLog >= LOG_EVERY_MS) {
@@ -377,7 +439,7 @@ extern "C" void LusxDebug_Tick(const char* where, long frames) {
         sLastLog = now;
     }
     if (asked != sFlushDone || second) {
-        WriteBox();
+        WriteBox(); // (nothing while the black box isn't open: Logging off)
     }
     sFlushDone = asked;
 }
@@ -385,6 +447,9 @@ extern "C" void LusxDebug_Tick(const char* where, long frames) {
 extern "C" void LusxDebug_Hang(const char* where, unsigned long seconds) {
     sState = "hung";
     sWhereNow = where;
+    if (!sFilesOpen) {
+        return;
+    }
     if (seconds >= LED_AFTER_SECONDS && !sLedOn) {
         Led(LED_RED);
     }
@@ -436,7 +501,7 @@ extern "C" void LusxDebug_Pad(unsigned buttons, int white, int black) {
     static const unsigned kCombo = XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_LEFT_THUMB | XINPUT_GAMEPAD_RIGHT_THUMB;
     static DWORD sLockSince;
 
-    if ((buttons & kCombo) != kCombo || !white || !black) {
+    if (!sFilesOn || (buttons & kCombo) != kCombo || !white || !black) { // a test of the files: Logging on only
         sLockSince = 0;
     } else if (sLockSince == 0) {
         sLockSince = GetTickCount() | 1;

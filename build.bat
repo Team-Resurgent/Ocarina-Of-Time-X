@@ -7,7 +7,7 @@ rem
 rem It finds a Python 3.8 or later and hands over to setup.py, which checks the
 rem ROM, fetches Ship of Harkinian's asset definitions and Torch, builds the
 rem archive tools, extracts the game from the ROM and builds. Arguments are
-rem passed on: build.bat --check, build.bat --tester, build.bat --skip-build.
+rem passed on: build.bat --check, build.bat --skip-build.
 setlocal EnableExtensions
 set "OOTX_SELF=%~f0"
 if not defined PATH set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem"

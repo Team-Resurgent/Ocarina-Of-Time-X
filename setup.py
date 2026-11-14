@@ -3,7 +3,6 @@
 
     python setup.py                 # everything -> out/Release/XISO/Ocarina-Of-Time-X.iso
     python setup.py --check         # say what is there and what is missing
-    python setup.py --tester        # with the tester tools: log files, overlay, black box -> out/Tester/
     python setup.py --skip-build    # everything but compiling the game (the archives, the tools)
 
 Needs: Python 3.8+ (standard library only), Git, Visual Studio 2022 or later
@@ -77,10 +76,16 @@ def die(msg):
     raise SystemExit(1)
 
 
-def run(cmd, cwd=None):
-    r = subprocess.run(cmd, cwd=cwd)
-    if r.returncode != 0:
-        die("failed (exit %d): %s" % (r.returncode, " ".join('"%s"' % c if " " in c else c for c in cmd)))
+def run(cmd, cwd=None, tries=1, again=None):
+    """Run cmd, stopping setup if it fails; with tries > 1 it runs again that many times in all, saying `again`
+    first."""
+    for attempt in range(1, tries + 1):
+        r = subprocess.run(cmd, cwd=cwd)
+        if r.returncode == 0:
+            return
+        if attempt < tries:
+            say("%s (try %d of %d)" % (again, attempt + 1, tries))
+    die("failed (exit %d): %s" % (r.returncode, " ".join('"%s"' % c if " " in c else c for c in cmd)))
 
 
 def git_head(path):
@@ -299,14 +304,16 @@ def fetch_at(url, rev, dst, sparse=None, tag=None):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     if sparse:
         # a partial clone of the tag: the folders' files are all that's downloaded
+        # (a clone that fails removes the folder it made, so it can simply run again)
         run(["git", "-c", "advice.detachedHead=false", "clone", "-q", "--depth", "1", "--branch", tag,
-             "--filter=blob:none", "--sparse", url, dst])
+             "--filter=blob:none", "--sparse", url, dst], tries=3, again="the download failed: trying again")
         run(["git", "-C", dst, "sparse-checkout", "set"] + list(sparse))
     else:
         os.makedirs(dst)
         run(["git", "init", "-q", dst])
         run(["git", "-C", dst, "remote", "add", "origin", url])
-        run(["git", "-C", dst, "fetch", "-q", "--depth", "1", "origin", tag or rev])
+        run(["git", "-C", dst, "fetch", "-q", "--depth", "1", "origin", tag or rev], tries=3,
+            again="the download failed: trying again")
         run(["git", "-C", dst, "checkout", "-q", "FETCH_HEAD"])
     head = git_head(dst)
     if head != rev:
@@ -324,7 +331,9 @@ def step_fetch():
         say("fetching Torch")
         fetch_at(TORCH_URL, TORCH_REV, TORCH_SRC)
     say("fetching the libraries (deps/)")
-    run([sys.executable, os.path.join(ROOT, "tools", "fetch_deps.py")])
+    # (fetch_deps skips the libraries already there, so a run cut short by the connection can simply run again)
+    run([sys.executable, os.path.join(ROOT, "tools", "fetch_deps.py")], tries=3,
+        again="a download failed: fetching the libraries again")
 
 
 def step_tools(jobs):
@@ -348,9 +357,13 @@ def step_tools(jobs):
         % gen)
     # CMAKE_POLICY_VERSION_MINIMUM: CMake 4 (Visual Studio 2026's) refuses a project that says it works with CMake
     # older than 3.5, as yaml-cpp (one of Torch's) says; this is CMake's own way to build it anyway
+    # tries: CMake git-clones Torch's libraries here, and a connection dropped mid-clone fails the whole step even
+    # when CMake's own second clone then works, as MSBuild takes git's "error: RPC failed" line as a build error.
+    # Run again, what was downloaded stays and the rest is fetched.
     run([cmake, "-S", os.path.join(ROOT, "tools", "extract"), "-B", TOOLS_BUILD, "-G", gen, "-A", "x64",
          "-DCMAKE_GENERATOR_INSTANCE=" + vs[0], "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
-         "-DTORCH_DIR=" + TORCH_SRC.replace("\\", "/")])
+         "-DTORCH_DIR=" + TORCH_SRC.replace("\\", "/")],
+        tries=3, again="a download of Torch's libraries failed (the connection dropped?): configuring again")
     say("building them")
     run([cmake, "--build", TOOLS_BUILD, "--config", "Release", "--parallel", str(jobs)])
     for exe in (TORCH_EXE, PACKER_EXE):
@@ -385,10 +398,10 @@ def step_archives(rom_sha):
         f.write(made_from)
 
 
-def step_build(tester, jobs):
-    say("building the game with the RXDK%s" % (" (with the tester tools)" if tester else ""))
-    run([sys.executable, os.path.join(ROOT, "tools", "build.py"), "-j", str(jobs)] + ([] if tester else ["--release"]))
-    config = "Tester" if tester else "Release"
+def step_build(jobs):
+    say("building the game with the RXDK")
+    run([sys.executable, os.path.join(ROOT, "tools", "build.py"), "-j", str(jobs)])
+    config = "Release"
     iso = os.path.join(ROOT, "out", config, "XISO", NAME + ".iso")
     if not os.path.isfile(iso):
         die("the disc image was not made")
@@ -400,8 +413,6 @@ def step_build(tester, jobs):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true", help="say what is there and what is missing, and stop")
-    ap.add_argument("--tester", action="store_true",
-                    help="build with the tester tools (log files on the hard disk, overlay, black box): out/Tester/")
     ap.add_argument("--skip-build", action="store_true", help="stop before compiling the game")
     ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
     a = ap.parse_args()
@@ -421,7 +432,7 @@ def main():
     if a.skip_build:
         say("stopped before the game's build (--skip-build)")
         return
-    step_build(a.tester, a.jobs)
+    step_build(a.jobs)
 
 
 if __name__ == "__main__":

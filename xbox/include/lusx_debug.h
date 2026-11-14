@@ -1,9 +1,10 @@
-/* lusx_debug.h -- the tester build's tools (xbox/src/lusx_debug.cpp), for retail consoles, where nothing hears the
- * debug channel: a log file, a black box file, the front LED, an on-screen overlay and a last-run report.
+/* lusx_debug.h -- the test tools (xbox/src/lusx_debug.cpp), for retail consoles, where nothing hears the debug
+ * channel: a log file, a black box file, the front LED and a last-run report, all only while the port menu's Logging
+ * is on; and an on-screen overlay, the menu's Test overlay. Both rows are on the Debug page, off on a fresh install.
  *
- * `python tools/build.py --release` leaves all of it out: LUSX_DEBUG_TOOLS is then 0, the file compiles to nothing and
- * every call below is an empty macro. To remove it for good: delete this header and lusx_debug.cpp, and the lines
- * naming LusxDebug_ or LUSX_DEBUG_TOOLS (git grep finds them all). */
+ * Every build has them. LUSX_DEBUG_TOOLS 0 (tools/build.py, generate) would leave all of it out: the file then compiles
+ * to nothing and every call below is an empty macro. To remove it for good: delete this header and lusx_debug.cpp, and
+ * the lines naming LusxDebug_ or LUSX_DEBUG_TOOLS (git grep finds them all). */
 #pragma once
 
 #include "lusx_debug_config.h" /* written by tools/build.py into build/gen */
@@ -20,6 +21,8 @@ void LusxDebug_Start(const char* built);
 void LusxDebug_Stop(void);
 /* a line of the log, from any thread (it's what xbWatson gets) */
 void LusxDebug_Line(const char* line);
+/* Logging on or off (lusx_log.h's LusxLog_Settle): the files written from now, or closed */
+void LusxDebug_Files(int on);
 /* a moment worth keeping, from a thread that can wait up to 40 ms (scene changes): on disk before it returns */
 void LusxDebug_Mark(const char* text);
 
@@ -55,6 +58,7 @@ const char* LusxDebug_OverlayLine(int line);
 #define LusxDebug_Start(built) ((void)0)
 #define LusxDebug_Stop() ((void)0)
 #define LusxDebug_Line(line) ((void)0)
+#define LusxDebug_Files(on) ((void)0)
 #define LusxDebug_Mark(text) ((void)0)
 #define LusxDebug_Hang(where, seconds) ((void)0)
 #define LusxDebug_Resumed() ((void)0)

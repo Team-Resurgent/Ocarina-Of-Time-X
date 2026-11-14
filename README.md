@@ -71,16 +71,17 @@ The build runs, in order:
 
 ```bash
 python setup.py --check         # what is present and what is missing
-python setup.py --tester        # with the tester tools: out\Tester\ (below)
 python setup.py --skip-build    # everything but the game's compile
 ```
 
-`--tester` adds what a test run needs on a retail console with nothing listening: a log
-file and a black box on the hard disk that survive a crash or a power-off, a report of the
-last run's end at the next start, and an on-screen overlay of the frame rate and memory
-(the log with **Logging**, the overlay with **Test overlay**, both on the port menu's Debug
-page). `tools\pull_logs.ps1` copies the files
-off the console over its FTP server.
+The build also has what a test run needs on a retail console with nothing listening, off
+until it's turned on from the port menu's Debug page:
+
+* **Logging**: a log file and a black box on the hard disk that survive a crash or a
+  power-off, and a report of the last run's end at the next start. Off, nothing is written.
+  `tools\pull_logs.ps1` copies the files off the console over its FTP server.
+* **Test overlay**: the frame rate, memory and timings on screen.
+* **Debug mode**: Warp (any area and entrance) and Edit save.
 
 ## Running
 
@@ -96,7 +97,7 @@ off the console over its FTP server.
   not its asset definitions or extra files, which `setup.py` fetches
 * `libultraship/` -- libultraship at the commit Ship of Harkinian 9.3.1 uses, with its Xbox
   port: the Direct3D 8 renderer, DirectSound, the Xbox controllers and file system
-* `xbox/` -- the Xbox side: `main`, the port's menu, saves, the tester tools
+* `xbox/` -- the Xbox side: `main`, the port's menu, saves, the test tools
 * `tools/` -- `build.py` (the game's build with the RXDK's clang), `fetch_deps.py`,
   `make_icons.py`, `extract/` (the archive tools' CMake project), `pull_logs.ps1`
 * `setup.py`, `build.bat` -- from the ROM to the disc

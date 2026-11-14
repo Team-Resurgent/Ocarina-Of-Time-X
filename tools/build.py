@@ -5,7 +5,6 @@ setup.py runs this once the archives are in data/; run on its own, it rebuilds t
 
     python tools/build.py [-k] [-j N] [--only GROUP[,GROUP]] [--file PATTERN]
                           [--no-link] [--clean] [--cmd PATTERN] [--no-lto]
-                          [--release]
 
 Compiles with the RXDK's clang and the flags its Rxdk.Cli uses (copied from
 `Rxdk.Cli build --verbose`), then links, runs imagebld and packs the disc the
@@ -19,11 +18,10 @@ way Rxdk.Cli does:
     build/log/<group>/...      each failed file's compiler output
     build/Ocarina-Of-Time-X.exe   the linked PE (with line tables, for symbols)
     build/Ocarina-Of-Time-X.xbe   the title
-    out/<config>/Build/Ocarina-Of-Time-X/      the disc's files: default.xbe, the
+    out/Release/Build/Ocarina-Of-Time-X/       the disc's files: default.xbe, the
                                archives (data/*.o2r) and the menu font, as copied
                                to a hard disk
-    out/<config>/XISO/Ocarina-Of-Time-X.iso    the disc image of them
-                               (<config>: Release with --release, else Tester)
+    out/Release/XISO/Ocarina-Of-Time-X.iso     the disc image of them
 
 Groups, in link order: deps (spdlog, tinyxml2, zlib, monocypher, stb),
 lus (libultraship minus ImGui, SDL, scripting, MPQ), game (SoH's C: the
@@ -33,9 +31,11 @@ self-registering hooks (ShipInit) stay in; --gc-sections drops what nothing
 reaches.
 
 -k keeps going past failures and lists them all (the porting loop);
---cmd prints the compile command for the files matching PATTERN;
---release leaves out the tester tools (xbox/include/lusx_debug.h): the log
-and black box files, the LED signal and the overlay.
+--cmd prints the compile command for the files matching PATTERN.
+
+There is one build. The test tools (xbox/include/lusx_debug.h: the log and
+black box files, the LED signal and the overlay) are in it, off until the port
+menu's Debug page turns them on (Logging, Test overlay).
 """
 import argparse
 import concurrent.futures
@@ -338,11 +338,11 @@ def write_if_changed(path, text):
             fh.write(text)
 
 
-def generate(release):
-    # a header and not a -D, so switching rebuilds only the files that include it: a -D is in every command
+def generate():
+    # a header and not a -D, so switching rebuilds only the files that include it: a -D is in every command. 1: the test
+    # tools are in every build, off until the Debug page turns them on; 0 here would leave them out
     for inc in ("lus", "soh"):
-        write_if_changed(os.path.join(GEN, inc, "lusx_debug_config.h"),
-                         "#define LUSX_DEBUG_TOOLS %d\n" % (0 if release else 1))
+        write_if_changed(os.path.join(GEN, inc, "lusx_debug_config.h"), "#define LUSX_DEBUG_TOOLS 1\n")
     write_if_changed(os.path.join(GEN, "stb_impl.c"),
                      "#define STB_IMAGE_IMPLEMENTATION\n#define STBI_NO_THREAD_LOCALS\n#define STBI_NO_SIMD\n#include \"stb_image.h\"\n")
     write_if_changed(os.path.join(GEN, "lus", "ship", "install_config.h"),
@@ -573,7 +573,7 @@ def archive(name, objs):
     return lib
 
 
-def link(objs, release):
+def link(objs):
     lk = os.path.join(BUILD, "link")
     os.makedirs(lk, exist_ok=True)
     eh = []
@@ -623,7 +623,7 @@ def link(objs, release):
     if r.returncode != 0:
         sys.stdout.write(r.stdout + r.stderr)
         raise SystemExit("build: imagebld failed")
-    out = os.path.join(ROOT, "out", "Release" if release else "Tester")
+    out = os.path.join(ROOT, "out", "Release")
     stage = os.path.join(out, "Build", TITLE)
     if os.path.isdir(stage):
         shutil.rmtree(stage)
@@ -658,13 +658,12 @@ def main():
     ap.add_argument("--no-link", action="store_true")
     ap.add_argument("--clean", action="store_true")
     ap.add_argument("--no-lto", action="store_true", help="native objects: a quicker link, or to compare")
-    ap.add_argument("--release", action="store_true", help="leave out the tester tools (xbox/include/lusx_debug.h)")
     a = ap.parse_args()
     global LTO
     LTO = not a.no_lto
     if a.clean and os.path.isdir(BUILD):
         shutil.rmtree(BUILD)
-    generate(a.release)
+    generate()
     # its "built" line is __DATE__ and __TIME__: compiled every time, so a log says which build it's from
     os.utime(os.path.join(XBOX, "src", "xbox_main.cpp"))
     only = set(a.only.split(",")) if a.only else None
@@ -685,7 +684,7 @@ def main():
         raise SystemExit(1)
     if not (a.no_link or only or a.file):
         # the game's objects, then libultraship and its dependencies as libraries
-        link(all_objs + libs, a.release)
+        link(all_objs + libs)
 
 
 if __name__ == "__main__":

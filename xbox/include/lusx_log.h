@@ -1,8 +1,8 @@
 /* lusx_log.h -- the port menu's Logging switch (Debug page, gLusx.Logging, off unless turned on). Off: nothing goes
- * to the debug channel (xbWatson) or to the tester build's log file, and SoH's and libultraship's spdlog lines aren't
- * even made. Until the config is read, lines are held (xbox_main.cpp), then sent or dropped as it says; a crash
- * before that sends them. Only the runtime's own start-up lines (RXDK) come before any of this. The tester build's
- * black box still records a crash with Logging off. */
+ * to the debug channel (xbWatson) or to the log file, the black box isn't written (lusx_debug.h), and SoH's and
+ * libultraship's spdlog lines aren't even made. Until the config is read, lines are held (xbox_main.cpp), then sent
+ * or dropped as it says; a crash before that sends them. Only the runtime's own start-up lines (RXDK) come before any
+ * of this. */
 #pragma once
 
 #ifdef __cplusplus
